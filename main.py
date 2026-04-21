@@ -1,12 +1,11 @@
-import time
+import os
 import boto3
 import config
 from scraper import get_jobs
 from telegram_bot import send_message
 
-# Initialize the connection to AWS DynamoDB
-# We specify the region we set in Terraform to be safe
-dynamodb = boto3.resource('dynamodb', region_name='eu-south-1') 
+# We use os.getenv('AWS_REGION') so it automatically looks in the exact region where Lambda is running
+dynamodb = boto3.resource('dynamodb', region_name=os.getenv('AWS_REGION', 'eu-central-1')) 
 table = dynamodb.Table(config.DYNAMODB_TABLE)
 
 def load_seen_jobs():
@@ -15,52 +14,43 @@ def load_seen_jobs():
         response = table.scan(ProjectionExpression="job_id")
         return {item['job_id'] for item in response.get('Items', [])}
     except Exception as e:
-        print(f"Error reading from DynamoDB: {e}")
+        print(f"Error reading DB: {e}")
         return set()
 
-def save_seen_job(job_id):
-    """Saves a newly found job ID to the DynamoDB table."""
-    try:
-        table.put_item(Item={'job_id': str(job_id)})
-    except Exception as e:
-        print(f"Error saving to DynamoDB: {e}")
-
 def lambda_handler(event, context):
-    """
-    This is the entry point that AWS Lambda calls when triggered by EventBridge.
-    The 'event' and 'context' parameters are required by AWS, even if we don't use them.
-    """
-    print("Starting Serverless job scan...")
-    
-    # 1. Get history from DynamoDB
+    print("Starting job scan...")
     seen_job_ids = load_seen_jobs()
-    
-    # 2. Scrape current jobs via Playwright
     current_jobs = get_jobs()
-    print(f"Found {len(current_jobs)} jobs on the page.")
     
-    new_jobs_count = 0
+    # 1. Filter out jobs we have already seen
+    new_jobs = [job for job in current_jobs if job["id"] not in seen_job_ids]
+    print(f"Found {len(current_jobs)} total jobs on page. {len(new_jobs)} are new.")
     
-    # 3. Compare and alert
-    for job in current_jobs:
-        if job["id"] not in seen_job_ids:
-            message = f"🚨 <b>New Job Alert</b> 🚨\n\n<b>Role:</b> {job['title']}\n<b>Company:</b> {job['company']}\n\n<a href='{job['link']}'>Apply Here</a>"
+    # If there are no new jobs, exit gracefully without sending a message
+    if not new_jobs:
+        msg = "Finished! No new jobs to report."
+        print(msg)
+        return {'statusCode': 200, 'body': msg}
+
+    # 2. Build a single, consolidated Telegram message
+    message = f"🚨 <b>Found {len(new_jobs)} New Jobs!</b> 🚨\n\n"
+    for job in new_jobs:
+        message += f"▪️ <b>{job['title']}</b> at {job['company']}\n<a href='{job['link']}'>Apply Here</a>\n\n"
+
+    # 3. Send the master message
+    if send_message(message):
+        # 4. Save the new jobs to DynamoDB in one efficient batch
+        try:
+            with table.batch_writer() as batch:
+                for job in new_jobs:
+                    batch.put_item(Item={'job_id': str(job["id"])})
+            print(f"Successfully saved {len(new_jobs)} new jobs to DynamoDB.")
+        except Exception as e:
+            print(f"Error saving to DynamoDB: {e}")
             
-            if send_message(message):
-                save_seen_job(job["id"])
-                new_jobs_count += 1
-                time.sleep(1) # Prevent hitting Telegram's rate limit
+    msg = f"Finished! Sent 1 consolidated alert for {len(new_jobs)} jobs."
+    print(msg)
+    return {'statusCode': 200, 'body': msg}
 
-    result_message = f"Finished! Sent {new_jobs_count} new job alerts."
-    print(result_message)
-    
-    # AWS Lambda expects a return response, usually a status code
-    return {
-        'statusCode': 200,
-        'body': result_message
-    }
-
-# This bottom block allows you to still test the code manually by running `python main.py` on your PC
 if __name__ == "__main__":
-    # We pass None for event and context since we aren't triggering it from AWS locally
     lambda_handler(None, None)

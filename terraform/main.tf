@@ -113,3 +113,9 @@ resource "aws_lambda_permission" "allow_eventbridge" {
 output "ecr_repository_url" {
   value = aws_ecr_repository.bot_repo.repository_url
 }
+
+# Attach AWS managed policy for DynamoDB full access 
+resource "aws_iam_role_policy_attachment" "dynamodb_full_access" {
+  role       = aws_iam_role.lambda_exec_role.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonDynamoDBFullAccess"
+}
