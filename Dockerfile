@@ -1,5 +1,5 @@
 # Use Microsoft's official Playwright image (includes the heavy browser binaries)
-FROM mcr.microsoft.com/playwright/python:v1.41.0-jammy
+FROM mcr.microsoft.com/playwright/python:v1.58.0-jammy
 
 # Set up the working directory inside the container
 ARG FUNCTION_DIR="/var/task"
