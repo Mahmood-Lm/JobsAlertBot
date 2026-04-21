@@ -7,7 +7,18 @@ def get_jobs():
     jobs_found = []
     
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True) 
+        browser = p.chromium.launch(
+            headless=True,
+            args=[
+                "--no-sandbox",
+                "--disable-setuid-sandbox",
+                "--disable-dev-shm-usage", # AWS Lambda has very limited shared memory
+                "--disable-gpu",           # AWS Lambda has no GPU
+                "--single-process",        # Forces browser into one thread to avoid Lambda process limits
+                "--no-zygote"              # Disables a specific process fork that Lambda blocks
+            ]
+        )        
+        
         page = browser.new_page()
         
         print("Navigating to LinkedIn...")
